@@ -3,8 +3,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework.generics import get_object_or_404
 
-from .models import Supermercado, Produto
-from .serializers import SupermercadoSerializer, ProdutoSerializer
+from .models import Supermercado, Produto, Preco
+from .serializers import SupermercadoSerializer, ProdutoSerializer, PrecoSerializer
 
 
 class SupermercadoList(APIView):
@@ -81,3 +81,50 @@ class ProdutoDetalhe(APIView):
         produto = get_object_or_404(Produto, pk=pk)
         produto.delete()
         return Response(status=204)
+
+class PrecoList(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        precos = Preco.objects.all()
+        serializer = PrecoSerializer(precos, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = PrecoSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+
+class PrecoDetalhe(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk):
+        preco = get_object_or_404(Preco, pk=pk)
+        serializer = PrecoSerializer(preco)
+        return Response(serializer.data)
+
+    def put(self, request, pk):
+        preco = get_object_or_404(Preco, pk=pk)
+        serializer = PrecoSerializer(preco, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=400)
+
+    def delete(self, request, pk):
+        preco = get_object_or_404(Preco, pk=pk)
+        preco.delete()
+        return Response(status=204)
+
+
+class ComparaPreco(APIView):
+    permission_classes = [AllowAny]
+
+    def get(self, request, produto_id):
+        produto = get_object_or_404(Produto, pk=produto_id)
+        precos = Preco.objects.filter(produto=produto).order_by('valor')
+        serializer = PrecoSerializer(precos, many=True)
+        return Response(serializer.data)

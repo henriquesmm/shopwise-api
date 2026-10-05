@@ -17,3 +17,9 @@ class Produto(models.Model):
 
     def __str__(self):
         return self.nome
+
+class Preco(models.Model):
+    produto = models.ForeignKey(Produto, on_delete=models.CASCADE)
+    supermercado = models.ForeignKey(Supermercado, on_delete=models.CASCADE)
+    valor = models.DecimalField(max_digits=10, decimal_places=2)
+    criado_em = models.DateTimeField(auto_now_add=True)
