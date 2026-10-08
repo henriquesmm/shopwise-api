@@ -52,3 +52,29 @@ class Preco(models.Model):
                 name='preco_valor_positivo',
             ),
         ]
+
+
+class ItemCarrinho(models.Model):
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='itens_carrinho',
+    )
+    preco = models.ForeignKey(Preco, on_delete=models.CASCADE)
+    quantidade = models.PositiveIntegerField(
+        default=1,
+        validators=[MinValueValidator(1)],
+    )
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['usuario', 'preco'],
+                name='item_unico_usuario_preco',
+            ),
+            models.CheckConstraint(
+                condition=Q(quantidade__gte=1),
+                name='item_carrinho_quantidade_positiva',
+            ),
+        ]

@@ -1,14 +1,20 @@
+from uuid import uuid4
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
-from .models import Supermercado, Produto, Preco
+
+from .models import Supermercado, Produto, Preco, ItemCarrinho
 
 
 class CadastroSerializer(serializers.Serializer):
     tipo = serializers.ChoiceField(choices=['usuario', 'supermercado'])
-    username = serializers.CharField(max_length=150, validators=[UnicodeUsernameValidator()])
+    nome = serializers.CharField(max_length=150, required=False)
+    username = serializers.CharField(
+        max_length=150, required=False, validators=[UnicodeUsernameValidator()]
+    )
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True, style={'input_type': 'password'})
     supermercado_nome = serializers.CharField(max_length=100, required=False)
@@ -29,6 +35,9 @@ class CadastroSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
+        if not attrs.get('nome') and not attrs.get('username'):
+            raise serializers.ValidationError({'nome': 'Informe seu nome.'})
+
         if attrs['tipo'] == 'supermercado':
             faltantes = {}
             if not attrs.get('supermercado_nome'):
@@ -42,7 +51,16 @@ class CadastroSerializer(serializers.Serializer):
                 'tipo': 'Escolha supermercado para informar os dados da loja.'
             })
 
-        usuario = get_user_model()(username=attrs['username'], email=attrs['email'])
+        # O username continua único internamente no Django. O nome pode se repetir.
+        if not attrs.get('username'):
+            email = attrs['email']
+            attrs['username'] = email if len(email) <= 150 else f'conta_{uuid4().hex}'
+
+        usuario = get_user_model()(
+            username=attrs['username'],
+            first_name=attrs.get('nome') or attrs['username'],
+            email=attrs['email'],
+        )
         try:
             validate_password(attrs['password'], user=usuario)
         except DjangoValidationError as erro:
@@ -56,6 +74,16 @@ class SupermercadoSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class ProdutoSerializer(serializers.ModelSerializer):
+    def validate_nome(self, value):
+        produtos = Produto.objects.filter(nome__iexact=value)
+        if self.instance:
+            produtos = produtos.exclude(pk=self.instance.pk)
+        if produtos.exists():
+            raise serializers.ValidationError(
+                'Este produto já existe. Use o ID do produto cadastrado.'
+            )
+        return value
+
     class Meta:
         model = Produto
         fields = '__all__'
@@ -66,3 +94,33 @@ class PrecoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Preco
         fields = '__all__'
+
+
+class ItemCarrinhoSerializer(serializers.ModelSerializer):
+    quantidade = serializers.IntegerField(min_value=1, max_value=2147483647, default=1)
+    produto_id = serializers.IntegerField(source='preco.produto_id', read_only=True)
+    produto_nome = serializers.CharField(source='preco.produto.nome', read_only=True)
+    supermercado_id = serializers.IntegerField(source='preco.supermercado_id', read_only=True)
+    supermercado_nome = serializers.CharField(source='preco.supermercado.nome', read_only=True)
+    valor_unitario = serializers.DecimalField(
+        source='preco.valor', max_digits=10, decimal_places=2, read_only=True
+    )
+    subtotal = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ItemCarrinho
+        fields = (
+            'id', 'preco', 'produto_id', 'produto_nome', 'supermercado_id',
+            'supermercado_nome', 'valor_unitario', 'quantidade', 'subtotal',
+        )
+
+    def get_subtotal(self, item):
+        return f'{item.preco.valor * item.quantidade:.2f}'
+
+
+class QuantidadeCarrinhoSerializer(serializers.ModelSerializer):
+    quantidade = serializers.IntegerField(min_value=1, max_value=2147483647)
+
+    class Meta:
+        model = ItemCarrinho
+        fields = ('quantidade',)

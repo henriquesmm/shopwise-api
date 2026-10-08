@@ -126,6 +126,12 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# No desenvolvimento, o Django serve também o site da pasta irmã.
+# As páginas e a API ficam no mesmo endereço, sem configuração de CORS.
+FRONTEND_DIR = BASE_DIR.parent / 'ShopWise' / 'ShopWise'
+if DEBUG and FRONTEND_DIR.is_dir():
+    STATICFILES_DIRS = [FRONTEND_DIR]
+
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
