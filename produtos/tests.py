@@ -1,14 +1,45 @@
 from datetime import timedelta
 from decimal import Decimal
+from io import StringIO
 
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
-from .models import Preco, Produto, Supermercado
+from .models import ItemCarrinho, Preco, Produto, Supermercado
 from .serializers import PrecoSerializer
+
+
+@override_settings(DEBUG=True)
+class PrepararDemoTests(TestCase):
+    def test_prepara_dados_e_pode_rodar_novamente(self):
+        for _ in range(2):
+            call_command('preparar_demo', senha='ShopWise@2026', stdout=StringIO())
+
+        self.assertEqual(get_user_model().objects.filter(
+            username__in=['felipe', 'jorge_super', 'quaresma']
+        ).count(), 3)
+        self.assertEqual(Supermercado.objects.count(), 2)
+        self.assertEqual(Produto.objects.count(), 1)
+        self.assertEqual(Preco.objects.count(), 2)
+
+        login = APIClient().post('/api/auth/login/', {
+            'username': 'quaresma', 'password': 'ShopWise@2026'
+        }, format='json')
+        self.assertEqual(login.status_code, 200)
+        self.assertEqual(login.data['tipo'], 'supermercado')
+        self.assertTrue(login.data['token'])
+
+        produto = Produto.objects.get(nome='Arroz 1 kg')
+        comparacao = APIClient().get(f'/api/produtos/{produto.pk}/comparar/')
+        self.assertEqual(comparacao.status_code, 200)
+        self.assertEqual(
+            [(item['supermercado_nome'], item['valor']) for item in comparacao.data],
+            [('Quaresma', '5.99'), ('Jorge Super', '6.49')],
+        )
 
 
 class PrecoAtualTests(TestCase):
@@ -116,6 +147,47 @@ class ComparacaoPrecoTests(TestCase):
 class CadastroTests(TestCase):
     url = '/api/auth/cadastro/'
     senha = 'SenhaSegura2026!'
+
+    def test_nome_pode_se_repetir_e_email_identifica_cada_conta(self):
+        cliente = APIClient().post(self.url, {
+            'tipo': 'usuario', 'nome': 'Felipe',
+            'email': 'felipe1@example.com', 'password': self.senha,
+        }, format='json')
+        mercado = APIClient().post(self.url, {
+            'tipo': 'supermercado', 'nome': 'Felipe',
+            'email': 'felipe2@example.com', 'password': self.senha,
+            'supermercado_nome': 'Mercado A',
+            'supermercado_endereco': 'Rua A, 1',
+        }, format='json')
+
+        self.assertEqual(cliente.status_code, 201)
+        self.assertEqual(mercado.status_code, 201)
+        self.assertEqual(cliente.data['nome'], 'Felipe')
+        self.assertEqual(mercado.data['nome'], 'Felipe')
+        self.assertEqual(
+            list(get_user_model().objects.order_by('email').values_list('first_name', flat=True)),
+            ['Felipe', 'Felipe'],
+        )
+
+        for email, tipo in (
+            ('felipe1@example.com', 'usuario'),
+            ('felipe2@example.com', 'supermercado'),
+        ):
+            with self.subTest(email=email):
+                login = APIClient().post('/api/auth/login/', {
+                    'email': email, 'password': self.senha,
+                }, format='json')
+                self.assertEqual(login.status_code, 200)
+                self.assertEqual(login.data['tipo'], tipo)
+                self.assertEqual(login.data['nome'], 'Felipe')
+                self.assertTrue(login.data['token'])
+
+        duplicado = APIClient().post(self.url, {
+            'tipo': 'usuario', 'nome': 'Outra Pessoa',
+            'email': 'FELIPE1@example.com', 'password': self.senha,
+        }, format='json')
+        self.assertEqual(duplicado.status_code, 400)
+        self.assertIn('email', duplicado.data)
 
     def test_cadastra_usuario_com_senha_protegida_e_permite_login(self):
         resposta = APIClient().post(self.url, {
@@ -276,12 +348,53 @@ class LoginEPermissoesTests(TestCase):
     def test_consulta_publica_e_escrita_sem_token_bloqueada(self):
         api = APIClient()
         self.assertEqual(api.get('/api/produtos/').status_code, 200)
+        self.assertEqual(
+            api.post('/api/produtos/', {'nome': 'Feijão 1 kg'}, format='json').status_code,
+            401,
+        )
         resposta = api.post(
             '/api/precos/',
             {'produto': self.produto.pk, 'supermercado': self.loja.pk, 'valor': '6.49'},
             format='json',
         )
         self.assertEqual(resposta.status_code, 401)
+
+    def test_supermercado_cadastra_produto_compartilhado(self):
+        api = self.api_com_token(self.mercado_usuario)
+        cadastro = api.post(
+            '/api/produtos/',
+            {'nome': 'Feijão 1 kg', 'categoria': 'Mercearia'},
+            format='json',
+        )
+        self.assertEqual(cadastro.status_code, 201)
+        produto_id = cadastro.data['id']
+
+        outro_mercado = self.api_com_token(self.outro_mercado_usuario)
+        preco = outro_mercado.post(
+            '/api/precos/',
+            {
+                'produto': produto_id,
+                'supermercado': self.outra_loja.pk,
+                'valor': '8.49',
+            },
+            format='json',
+        )
+        self.assertEqual(preco.status_code, 201)
+
+        duplicado = api.post(
+            '/api/produtos/', {'nome': 'feijão 1 kg'}, format='json'
+        )
+        self.assertEqual(duplicado.status_code, 400)
+        self.assertIn('nome', duplicado.data)
+
+        alterar = api.put(
+            f'/api/produtos/{produto_id}/',
+            {'nome': 'Feijão 2 kg', 'categoria': 'Mercearia'},
+            format='json',
+        )
+        self.assertEqual(alterar.status_code, 403)
+        self.assertEqual(api.delete(f'/api/produtos/{produto_id}/').status_code, 403)
+        self.assertTrue(Produto.objects.filter(pk=produto_id, nome='Feijão 1 kg').exists())
 
     def test_supermercado_edita_apenas_preco_da_propria_loja(self):
         api = self.api_com_token(self.mercado_usuario)
@@ -333,3 +446,102 @@ class LoginEPermissoesTests(TestCase):
             '/api/produtos/', {'nome': 'Feijão', 'categoria': 'Mercearia'}, format='json'
         )
         self.assertEqual(resposta.status_code, 201)
+
+
+class CarrinhoTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.usuario = User.objects.create_user(username='cliente', password='senha12345')
+        self.outro_usuario = User.objects.create_user(username='outro', password='senha12345')
+        produto = Produto.objects.create(nome='Arroz 1 kg')
+        supermercado = Supermercado.objects.create(nome='Mercado A', endereco='Rua A')
+        self.preco = Preco.objects.create(
+            produto=produto, supermercado=supermercado, valor=Decimal('6.49')
+        )
+
+    def api_com_token(self, usuario):
+        api = APIClient()
+        token, _ = Token.objects.get_or_create(user=usuario)
+        api.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+        return api
+
+    def test_exige_login_e_isola_carrinho_por_usuario(self):
+        anonimo = APIClient()
+        self.assertEqual(anonimo.get('/api/carrinho/').status_code, 401)
+        self.assertEqual(anonimo.post('/api/carrinho/', {
+            'preco': self.preco.pk,
+        }, format='json').status_code, 401)
+
+        cliente = self.api_com_token(self.usuario)
+        cadastro = cliente.post('/api/carrinho/', {
+            'preco': self.preco.pk,
+        }, format='json')
+        self.assertEqual(cadastro.status_code, 201)
+        item_id = cadastro.data['id']
+
+        outro = self.api_com_token(self.outro_usuario)
+        self.assertEqual(outro.get('/api/carrinho/').data['itens'], [])
+        self.assertEqual(outro.get(f'/api/carrinho/{item_id}/').status_code, 404)
+        self.assertEqual(outro.put(f'/api/carrinho/{item_id}/', {
+            'quantidade': 2,
+        }, format='json').status_code, 404)
+        self.assertEqual(outro.delete(f'/api/carrinho/{item_id}/').status_code, 404)
+        self.assertTrue(ItemCarrinho.objects.filter(pk=item_id, usuario=self.usuario).exists())
+
+    def test_adiciona_atualiza_total_e_remove_item(self):
+        api = self.api_com_token(self.usuario)
+        cadastro = api.post('/api/carrinho/', {
+            'preco': self.preco.pk, 'quantidade': 2,
+        }, format='json')
+        self.assertEqual(cadastro.status_code, 201)
+        item_id = cadastro.data['id']
+        self.assertEqual(cadastro.data['produto_nome'], 'Arroz 1 kg')
+        self.assertEqual(cadastro.data['supermercado_nome'], 'Mercado A')
+        self.assertEqual(cadastro.data['subtotal'], '12.98')
+
+        repetido = api.post('/api/carrinho/', {
+            'preco': self.preco.pk, 'quantidade': 1,
+        }, format='json')
+        self.assertEqual(repetido.status_code, 200)
+        self.assertEqual(repetido.data['id'], item_id)
+        self.assertEqual(repetido.data['quantidade'], 3)
+        self.assertEqual(ItemCarrinho.objects.count(), 1)
+        self.assertEqual(api.get('/api/carrinho/').data['total'], '19.47')
+
+        atualizado = api.put(f'/api/carrinho/{item_id}/', {
+            'quantidade': 4,
+        }, format='json')
+        self.assertEqual(atualizado.status_code, 200)
+        self.assertEqual(atualizado.data['quantidade'], 4)
+
+        self.preco.valor = Decimal('5.99')
+        self.preco.save()
+        carrinho = api.get('/api/carrinho/').data
+        self.assertEqual(carrinho['itens'][0]['valor_unitario'], '5.99')
+        self.assertEqual(carrinho['total'], '23.96')
+
+        self.assertEqual(api.delete(f'/api/carrinho/{item_id}/').status_code, 204)
+        self.assertEqual(api.get('/api/carrinho/').data, {
+            'itens': [], 'total': '0.00',
+        })
+
+    def test_rejeita_preco_inexistente_e_quantidade_invalida(self):
+        api = self.api_com_token(self.usuario)
+        self.assertEqual(api.post('/api/carrinho/', {
+            'preco': 999999,
+        }, format='json').status_code, 400)
+        self.assertEqual(api.post('/api/carrinho/', {
+            'preco': self.preco.pk, 'quantidade': 0,
+        }, format='json').status_code, 400)
+        self.assertEqual(api.post('/api/carrinho/', {
+            'preco': self.preco.pk, 'quantidade': -1,
+        }, format='json').status_code, 400)
+        self.assertEqual(ItemCarrinho.objects.count(), 0)
+
+        item_id = api.post('/api/carrinho/', {
+            'preco': self.preco.pk,
+        }, format='json').data['id']
+        self.assertEqual(api.put(f'/api/carrinho/{item_id}/', {
+            'quantidade': 0,
+        }, format='json').status_code, 400)
+        self.assertEqual(ItemCarrinho.objects.get(pk=item_id).quantidade, 1)
