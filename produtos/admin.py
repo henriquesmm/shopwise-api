@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Preco, Produto, Supermercado
+from .models import Preco, Produto, Supermercado, Pedido, ItemPedido
 
 
 @admin.register(Supermercado)
@@ -11,3 +11,5 @@ class SupermercadoAdmin(admin.ModelAdmin):
 
 admin.site.register(Produto)
 admin.site.register(Preco)
+admin.site.register(Pedido)
+admin.site.register(ItemPedido)

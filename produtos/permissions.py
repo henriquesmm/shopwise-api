@@ -11,3 +11,13 @@ class LeituraPublicaEscritaAdmin(BasePermission):
 class LeituraPublicaEscritaAutenticada(BasePermission):
     def has_permission(self, request, view):
         return request.method in SAFE_METHODS or request.user.is_authenticated
+
+
+class LeituraPublicaCadastroSupermercado(BasePermission):
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        usuario = request.user
+        return usuario.is_authenticated and (
+            usuario.is_staff or usuario.supermercados.exists()
+        )
