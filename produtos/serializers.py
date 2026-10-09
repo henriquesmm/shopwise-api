@@ -1,9 +1,7 @@
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.validators import UnicodeUsernameValidator
-from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .models import Supermercado, Produto, Preco, ItemCarrinho
@@ -56,15 +54,6 @@ class CadastroSerializer(serializers.Serializer):
             email = attrs['email']
             attrs['username'] = email if len(email) <= 150 else f'conta_{uuid4().hex}'
 
-        usuario = get_user_model()(
-            username=attrs['username'],
-            first_name=attrs.get('nome') or attrs['username'],
-            email=attrs['email'],
-        )
-        try:
-            validate_password(attrs['password'], user=usuario)
-        except DjangoValidationError as erro:
-            raise serializers.ValidationError({'password': erro.messages})
         return attrs
 
 

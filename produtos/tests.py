@@ -262,7 +262,7 @@ class CadastroTests(TestCase):
                 self.assertIn(campo, resposta.data)
         self.assertEqual(get_user_model().objects.count(), 1)
 
-    def test_rejeita_supermercado_sem_dados_e_senha_fraca(self):
+    def test_rejeita_supermercado_sem_dados_e_aceita_senha_simples(self):
         incompleto = APIClient().post(self.url, {
             'tipo': 'supermercado', 'username': 'mercado_a',
             'email': 'mercado@example.com', 'password': self.senha,
@@ -271,13 +271,20 @@ class CadastroTests(TestCase):
         self.assertIn('supermercado_nome', incompleto.data)
         self.assertIn('supermercado_endereco', incompleto.data)
 
-        senha_fraca = APIClient().post(self.url, {
+        senha_numerica = APIClient().post(self.url, {
             'tipo': 'usuario', 'username': 'ana',
             'email': 'ana@example.com', 'password': '123',
         }, format='json')
-        self.assertEqual(senha_fraca.status_code, 400)
-        self.assertIn('password', senha_fraca.data)
-        self.assertEqual(get_user_model().objects.count(), 0)
+        self.assertEqual(senha_numerica.status_code, 201)
+        self.assertTrue(get_user_model().objects.get(username='ana').check_password('123'))
+
+        senha_comum = APIClient().post(self.url, {
+            'tipo': 'usuario', 'nome': 'Felipe',
+            'email': 'felipe@example.com', 'password': 'password',
+        }, format='json')
+        self.assertEqual(senha_comum.status_code, 201)
+        self.assertTrue(get_user_model().objects.get(email='felipe@example.com').check_password('password'))
+        self.assertEqual(get_user_model().objects.count(), 2)
         self.assertEqual(Supermercado.objects.count(), 0)
 
 
